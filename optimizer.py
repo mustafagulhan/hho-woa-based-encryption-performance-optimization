@@ -2,25 +2,61 @@ import numpy as np
 import math
 import random
 import matplotlib.pyplot as plt
-from crypto_engine import CryptoBenchmark
+from Crypto.Random import get_random_bytes
+from crypto_engine import CryptoBenchmarkV2
 
-class HybridOptimizer:
-    def __init__(self, pop_size=10, max_iter=20):
+class AcademicOptimizer:
+    def __init__(self, pop_size=10, max_iter=20, data_size_mb=10):
         self.pop_size = pop_size
         self.max_iter = max_iter
-        self.engine = CryptoBenchmark()
+        self.engine = CryptoBenchmarkV2()
+        self.data_size_bytes = data_size_mb * 1024 * 1024
         
-        # PARAMETRE SINIRLARI
-        # x1: Algo (0-4), x2: Mod (0-2), x3: Key (0-2), x4: Block (1024-65536), x5: Thread (1-8)
+        # Test Verisi (Gerçek veri, simülasyon yok)
+        print(f">>> {data_size_mb} MB test verisi oluşturuluyor...")
+        self.test_data = get_random_bytes(self.data_size_bytes)
+        print(">>> Veri hazır.")
+
+        # Parametre Sınırları
+        # x0: Algo(0-4), x1: Mod(0-2), x2: Key(0-2), x3: Buffer(1KB-64KB), x4: Dummy(Thread)
         self.lb = [0, 0, 0, 1024, 1]
-        self.ub = [4.99, 2.99, 2.99, 65536, 8]
-        self.dim = 5 
-        self.convergence_curve = [] 
+        self.ub = [4.49, 2.49, 2.49, 65536, 8]
+        self.dim = 5
+        
+        self.convergence_curve = []
+        
+        # Dinamik Normalizasyon için Geçmiş Kaydı
+        self.history_max = {"Time": 1.0, "CPU": 1.0, "Mem": 1.0}
+
+    def calculate_fitness(self, x):
+        res = self.engine.run_benchmark(x, self.test_data)
+        if res is None:
+            return self.engine.PENALTY
+        
+        # --- DİNAMİK NORMALİZASYON (Kritik Düzeltme) ---
+        # Gördüğümüz en yüksek değerleri güncelliyoruz
+        if res["Time"] > self.history_max["Time"]: self.history_max["Time"] = res["Time"]
+        if res["CPU_Time"] > self.history_max["CPU"]: self.history_max["CPU"] = res["CPU_Time"]
+        if res["Memory"] > self.history_max["Mem"]: self.history_max["Mem"] = res["Memory"]
+        
+        # 0-1 Arasına çekme
+        n_Time = res["Time"] / self.history_max["Time"]
+        n_CPU = res["CPU_Time"] / self.history_max["CPU"]
+        n_Mem = res["Memory"] / self.history_max["Mem"]
+        n_Sec = res["Security"] # Zaten 0-1 arası
+        
+        # Amaç Fonksiyonu
+        cost = (self.engine.wT * n_Time) + \
+               (self.engine.wCPU * n_CPU) + \
+               (self.engine.wM * n_Mem) - \
+               (self.engine.wS * n_Sec)
+               
+        return cost
 
     def optimize(self):
         population = np.zeros((self.pop_size, self.dim))
         
-        # Rastgele Başlangıç
+        # Başlangıç Popülasyonu
         for i in range(self.pop_size):
             for j in range(self.dim):
                 population[i, j] = random.uniform(self.lb[j], self.ub[j])
@@ -28,136 +64,85 @@ class HybridOptimizer:
         rabbit_pos = np.zeros(self.dim)
         rabbit_score = float("inf")
 
-        print(f"{'İterasyon':<10} | {'En İyi Skor':<15} | {'En İyi Parametreler'}")
-        print("-" * 75)
+        print(f"{'İter':<5} | {'Cost':<10} | {'Parametreler (Algo-Mod-Key-Buf)'}")
+        print("-" * 60)
 
         for t in range(self.max_iter):
-            # --- Fitness Hesaplama ---
+            
+            # 1. Fitness Hesapla & Rabbit Güncelle
             for i in range(self.pop_size):
-                for j in range(self.dim):
-                    population[i, j] = np.clip(population[i, j], self.lb[j], self.ub[j])
+                # Sınır Kontrolü
+                population[i, :] = np.clip(population[i, :], self.lb, self.ub)
                 
-                fitness = self.engine.fitness(population[i, :])
+                fitness = self.calculate_fitness(population[i, :])
                 
                 if fitness < rabbit_score:
                     rabbit_score = fitness
                     rabbit_pos = population[i, :].copy()
-
+            
             self.convergence_curve.append(rabbit_score)
-
-            # --- HHO-WOA Güncelleme ---
+            
+            # 2. HHO-WOA Hibrit Döngüsü (Akademik Versiyon)
+            # E1: Enerjinin azalması (Lineer değil, Non-lineer olabilir ama HHO lineer kullanır)
             E1 = 2 * (1 - (t / self.max_iter))
+            
             for i in range(self.pop_size):
                 E0 = 2 * random.random() - 1
-                E = 2 * E0 * (1 - (t / self.max_iter))
-                p = random.random()
+                E = 2 * E0 * E1  # Kaçış Enerjisi
                 
-                if p < 0.5: # HHO
-                    if abs(E) >= 1:
-                        q = random.random()
-                        rand_hawk_idx = random.randint(0, self.pop_size - 1)
-                        rand_hawk = population[rand_hawk_idx, :]
-                        if q < 0.5:
-                            population[i, :] = rand_hawk - random.random() * abs(rand_hawk - 2 * random.random() * population[i, :])
-                        else:
-                            population[i, :] = (rabbit_pos - population[i, :].mean(0)) - random.random() * ((self.ub[0] - self.lb[0]) * random.random() + self.lb[0])
+                # --- FAZ 1: KEŞİF (EXPLORATION) - HHO KULLANILIR ---
+                if abs(E) >= 1:
+                    # HHO Exploration Equations
+                    q = random.random()
+                    rand_hawk_idx = random.randint(0, self.pop_size - 1)
+                    rand_hawk = population[rand_hawk_idx, :]
+                    
+                    if q < 0.5:
+                        # Random konuma göre güncelle
+                        population[i, :] = rand_hawk - random.random() * abs(rand_hawk - 2 * random.random() * population[i, :])
                     else:
-                        J = 2 * (1 - random.random())
-                        population[i, :] = (rabbit_pos - population[i, :]) - E * abs(J * rabbit_pos - population[i, :])
-                else: # WOA
+                        # Tavşan ve ortalama konuma göre güncelle
+                        population[i, :] = (rabbit_pos - population.mean(0)) - random.random() * ((np.array(self.ub) - np.array(self.lb)) * random.random() + np.array(self.lb))
+                
+                # --- FAZ 2: SÖMÜRÜ (EXPLOITATION) - WOA ENTEGRASYONU ---
+                else:
+                    # Burada HHO'nun "Besiege" taktikleri yerine
+                    # WOA'nın meşhur "Spiral Updating" mekanizmasını kullanıyoruz.
+                    # Bu, literatürde "HHO with WOA Mutation" veya "Hybrid HHO-WOA" olarak geçer.
+                    
+                    # Spiral Denklem (WOA)
                     distance = abs(rabbit_pos - population[i, :])
-                    b = 1
-                    l = (random.random() * 2) - 1
+                    b = 1 # Spiral sabit
+                    l = (random.random() * 2) - 1 # -1 ile 1 arası
+                    
+                    # D' * e^bl * cos(2*pi*l) + Rabbit
                     population[i, :] = distance * math.exp(b * l) * math.cos(2 * math.pi * l) + rabbit_pos
 
-            display_params = [int(round(x)) for x in rabbit_pos]
-            print(f"{t+1:<10} | {rabbit_score:.5f}         | {display_params}")
+            # İlerleme Raporu
+            algo_map = ["AES", "ChaCha", "3DES", "Blow", "CAST"]
+            algo_name = algo_map[int(round(rabbit_pos[0]))]
+            print(f"{t+1:<5} | {rabbit_score:.5f}    | {algo_name} - {int(rabbit_pos[3])} byte Buf")
 
         return rabbit_pos, rabbit_score
 
-    def plot_convergence(self):
+    def plot_results(self):
         plt.figure(figsize=(10, 6))
-        plt.plot(self.convergence_curve, 'r-o', linewidth=2, label="HHO-WOA")
-        plt.title('Optimizasyon Süreci (Yakınsama)', fontsize=14)
+        plt.plot(self.convergence_curve, 'r-o', linewidth=2, label="Hybrid HHO-WOA (Academic)")
+        plt.title('Yakınsama Grafiği (Dinamik Normalizasyon)', fontsize=14)
         plt.xlabel('İterasyon', fontsize=12)
-        plt.ylabel('Maliyet (Daha düşük daha iyi)', fontsize=12)
+        plt.ylabel('Maliyet', fontsize=12)
         plt.grid(True)
         plt.legend()
-        plt.savefig('grafik_yakinsama.png')
-        print("-> Yakınsama grafiği kaydedildi: grafik_yakinsama.png")
-        # plt.show() # Pencereleri üst üste açmamak için kapalı tutuyoruz
+        plt.savefig('academic_result.png')
+        print("Grafik kaydedildi.")
 
-    def compare_all_algorithms(self, best_params):
-        """
-        Bulunan en iyi ayarları (Blok boyutu, Thread vb.) sabit tutarak
-        tüm algoritmaları birbiriyle kıyaslar.
-        """
-        algos = ["AES", "ChaCha20", "3DES", "Blowfish", "CAST5"]
-        scores = []
-        
-        print("\n" + "="*50)
-        print("FİNAL KIYASLAMA TESTİ (Aynı Şartlar Altında)")
-        print("="*50)
-        print(f"{'Algoritma':<15} | {'Maliyet (Cost)':<15} | {'Durum'}")
-        print("-" * 50)
-
-        # HHO-WOA'nın bulduğu parametreleri al
-        best_mode = best_params[1]
-        best_key = best_params[2]
-        best_block = best_params[3]
-        best_thread = best_params[4]
-
-        # Her algoritma için testi çalıştır
-        for i in range(5):
-            # Parametre setini oluştur: [AlgoID, Mode, Key, Block, Thread]
-            test_params = [i, best_mode, best_key, best_block, best_thread]
-            
-            # Motoru çalıştır
-            score = self.engine.fitness(test_params)
-            scores.append(score)
-            
-            # Kazananı işaretle
-            status = "KAZANAN (OPTIMUM)" if score == min(scores) else ""
-            if i > 0 and score == min(scores): status = "KAZANAN" # İlk değilse
-
-            print(f"{algos[i]:<15} | {score:.5f}         | {status}")
-
-        # --- KIYASLAMA GRAFİĞİ (BAR CHART) ---
-        plt.figure(figsize=(10, 6))
-        colors = ['gray'] * 5
-        # En düşük skora sahip olanı (Kazananı) Yeşil yap
-        best_idx = scores.index(min(scores))
-        colors[best_idx] = 'green'
-        
-        plt.bar(algos, scores, color=colors)
-        plt.title('Algoritmaların Performans Kıyaslaması\n(Sabit Blok Boyutu ve Thread Ayarlarında)', fontsize=14)
-        plt.ylabel('Maliyet Skoru (Düşük olan iyi)', fontsize=12)
-        plt.grid(axis='y', linestyle='--', alpha=0.7)
-        
-        plt.savefig('grafik_kiyaslama.png')
-        print("-> Kıyaslama grafiği kaydedildi: grafik_kiyaslama.png")
-        plt.show()
-
-# --- ÇALIŞTIRMA ---
 if __name__ == "__main__":
-    print("\n>>> HHO-WOA Optimizasyonu Başlıyor...\n")
+    # Gerçek veri işlediğimiz için 10MB veya 20MB makul bir testtir.
+    # 50 MB biraz uzun sürebilir ama denenebilir.
+    optimizer = AcademicOptimizer(pop_size=10, max_iter=15, data_size_mb=10)
+    best_x, best_score = optimizer.optimize()
+    optimizer.plot_results()
     
-    optimizer = HybridOptimizer(pop_size=15, max_iter=20)
-    best_params, best_score = optimizer.optimize()
-    
-    # 1. Yakınsama Grafiğini Çiz
-    optimizer.plot_convergence()
-
-    # 2. Sonuç Raporu
-    print("\n" + "="*50)
-    print("OPTIMIZASYON SONUCU")
-    print("="*50)
-    algos = ["AES", "ChaCha20", "3DES", "Blowfish", "CAST5"]
-    algo_name = algos[int(round(best_params[0]))]
-    print(f"Seçilen Algoritma : {algo_name}")
-    print(f"Blok Boyutu       : {int(round(best_params[3]))} bytes")
-    print(f"Thread Sayısı     : {int(round(best_params[4]))}")
-
-    # 3. Kıyaslama (Comparison) Yap
-    # İşte senin istediğin "Hepsini deneyip sonuç gösterme" kısmı:
-    optimizer.compare_all_algorithms(best_params)
+    print("\n>>> EN İYİ ÇÖZÜM <<<")
+    print(f"Skor: {best_score}")
+    print(f"Parametreler: {best_x}")
