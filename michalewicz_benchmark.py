@@ -21,7 +21,7 @@ def michalewicz(x: np.ndarray, m: int = 10) -> float:
 
 class MichalewiczOptimizer:
     """
-    HHO-WOA, DE ve PSO'yu Michalewicz fonksiyonu için karşılaştırmalı olarak çalıştırır.
+    HHO-WOA, DE ve PSO'yu Michalewicz fonksiyonu için karşılaştırmalı olarak çalıştırılır.
     """
 
     def __init__(self, dim: int = 50, pop_size: int = 60, max_iter: int = 1000, m_param: int = 10):
@@ -199,7 +199,7 @@ if __name__ == "__main__":
     optimizer.plot_results()
 
     print("\n" + "=" * 70)
-    print("🏆 Michalewicz Sonuç Özeti (d=50, m=10)")
+    print("Michalewicz Sonuç Özeti (d=50, m=10)")
     print("=" * 70)
     optimizer.summarize("HHO-WOA", hho_x, hho_score)
     print("-" * 60)
