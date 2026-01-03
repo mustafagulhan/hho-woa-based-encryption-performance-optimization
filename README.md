@@ -116,3 +116,17 @@ Bu sayede sistem:
 
 Bu proje, kriptografik algoritmalar arasında **tek başına en hızlı veya en güvenli olanı** seçmeyi değil;  
 **çalıştığı sistem, anlık yük ve güvenlik gereksinimleri bağlamında en dengeli çözümü** bulmayı hedefler.
+
+---
+
+## Ek Çalışma: Michalewicz Benchmark (d=50, m=10)
+
+- HHO-WOA, DE ve PSO algoritmaları, Michalewicz fonksiyonunun 50 boyutlu versiyonunu (m=10, 0 ≤ x_i ≤ π) minimize etmek için kullanılır.
+- Popülasyon: 60, iterasyon: 1000 (istek doğrultusunda).
+- Çıktı: `michalewicz_result.png` içinde üç algoritmanın yakınsama eğrileri; konsolda en iyi skorlar ve örnek çözüm bileşenleri.
+
+Çalıştırmak için:
+
+```bash
+python michalewicz_benchmark.py
+```
